@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>H.264 Camera Preview</title>
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #111316;
+      color: #f5f7fa;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      background: #191d23;
+      border-bottom: 1px solid #303640;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .status {
+      font-size: 13px;
+      color: #b8c0cc;
+      white-space: nowrap;
+    }
+
+    main {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+
+    .viewer {
+      width: min(100%, 1280px);
+      aspect-ratio: 16 / 9;
+      background: #050608;
+      border: 1px solid #343b46;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #050608;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Camera Preview</h1>
+    <div class="status" id="status">Connecting</div>
+  </header>
+  <main>
+    <div class="viewer">
+      <video id="video" autoplay muted playsinline controls></video>
+    </div>
+  </main>
+  <script src="hls.min.js"></script>
+  <script>
+    const video = document.getElementById("video");
+    const status = document.getElementById("status");
+    const source = `/hls/stream.m3u8?t=${Date.now()}`;
+
+    function setStatus(text) {
+      status.textContent = text;
+    }
+
+    if (window.Hls && Hls.isSupported()) {
+      const hls = new Hls({
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDurationCount: 4,
+        lowLatencyMode: true,
+      });
+      hls.loadSource(source);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setStatus("Live - H.264 HLS");
+        video.play().catch(() => setStatus("Tap play"));
+      });
+      hls.on(Hls.Events.ERROR, (_, data) => {
+        if (data.fatal) {
+          setStatus("Reconnecting");
+          hls.startLoad();
+        }
+      });
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = source;
+      video.addEventListener("loadedmetadata", () => {
+        setStatus("Live - H.264 HLS");
+        video.play().catch(() => setStatus("Tap play"));
+      });
+    } else {
+      setStatus("HLS unsupported");
+    }
+  </script>
+</body>
+</html>

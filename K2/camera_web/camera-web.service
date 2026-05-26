@@ -1,0 +1,19 @@
+[Unit]
+Description=USB Camera Web Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=z
+Group=z
+WorkingDirectory=/home/z/camera-web
+Environment=WEB_PORT=8080
+ExecStart=/usr/bin/python3 /home/z/camera-web/camera_server.py
+Restart=always
+RestartSec=2
+StandardOutput=append:/home/z/camera-web/logs/web.log
+StandardError=append:/home/z/camera-web/logs/web.log
+
+[Install]
+WantedBy=multi-user.target

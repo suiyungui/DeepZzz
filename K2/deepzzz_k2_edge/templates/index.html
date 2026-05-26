@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeepZZZ K2 Edge</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>DeepZZZ K2 Edge</h1>
+        <p>高画质预览和低帧率识别分流运行</p>
+      </div>
+      <div class="status" id="status">connecting</div>
+    </header>
+
+    <main class="workspace">
+      <section class="viewer comparePanel">
+        <div class="sectionHead">
+          <h2>HD Preview</h2>
+          <span id="previewMeta">waiting</span>
+        </div>
+        <div class="videoFrame">
+          <video id="video" autoplay muted playsinline controls></video>
+          <canvas id="overlay"></canvas>
+        </div>
+      </section>
+
+      <section class="panel lowresPanel">
+        <div class="panelHead">
+          <h2>Lowres Analysis</h2>
+          <button id="refreshSnapshot">Refresh</button>
+        </div>
+        <div class="lowresCompare">
+          <img id="snapshot" alt="" />
+          <div class="skeletonBox">
+            <canvas id="poseModel" width="260" height="260"></canvas>
+          </div>
+        </div>
+        <dl class="metricsGrid" id="metrics">
+          <dt>Engine</dt><dd id="metricEngine">-</dd>
+          <dt>Frame</dt><dd id="metricFrame">-</dd>
+          <dt>Updated</dt><dd id="metricUpdated">-</dd>
+          <dt>Latency</dt><dd id="metricLatency">-</dd>
+          <dt>Model active</dt><dd id="metricModelActive">-</dd>
+          <dt>Persons</dt><dd id="metricPersons">-</dd>
+        </dl>
+      </section>
+
+      <section class="controlPanel">
+        <div class="toolbar">
+          <button id="cameraStart">Start Camera</button>
+          <button id="cameraStop">Stop Camera</button>
+          <button id="visionStart">Start Vision</button>
+          <button id="visionStop">Stop Vision</button>
+        </div>
+        <div class="summaryGrid">
+          <div class="summaryItem">
+            <span>Persons</span>
+            <strong id="personsSummary">-</strong>
+          </div>
+          <div class="summaryItem">
+            <span>Latency</span>
+            <strong id="latencySummary">-</strong>
+          </div>
+          <div class="summaryItem">
+            <span>CPU</span>
+            <strong id="cpuSummary">-</strong>
+          </div>
+          <div class="summaryItem">
+            <span>App</span>
+            <strong id="appSummary">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="alertPanel panel" id="faceCoverPanel">
+        <h2>Face Cover / Rollover</h2>
+        <dl class="metricsGrid">
+          <dt>Status</dt><dd id="coverStatus">waiting</dd>
+          <dt>Reason</dt><dd id="coverReason">-</dd>
+          <dt>Visible face points</dt><dd id="coverVisiblePoints">-</dd>
+          <dt>Nose</dt><dd id="coverNose">-</dd>
+          <dt>Left eye</dt><dd id="coverLeftEye">-</dd>
+          <dt>Right eye</dt><dd id="coverRightEye">-</dd>
+          <dt>Left ear</dt><dd id="coverLeftEar">-</dd>
+          <dt>Right ear</dt><dd id="coverRightEar">-</dd>
+        </dl>
+      </section>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Runtime</h2>
+          <dl id="runtime">
+            <dt>Camera</dt><dd id="runtimeCamera">-</dd>
+            <dt>Device</dt><dd id="runtimeDevice">-</dd>
+            <dt>HLS</dt><dd id="runtimeHls">-</dd>
+            <dt>Preview</dt><dd id="runtimePreview">-</dd>
+            <dt>Analysis</dt><dd id="runtimeAnalysis">-</dd>
+            <dt>Frames</dt><dd id="runtimeFrames">-</dd>
+            <dt>Vision</dt><dd id="runtimeVision">-</dd>
+            <dt>Audio</dt><dd id="runtimeAudio">-</dd>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Resources</h2>
+          <dl id="resources">
+            <dt>CPU</dt><dd id="resourceCpu">-</dd>
+            <dt>Load</dt><dd id="resourceLoad">-</dd>
+            <dt>Memory</dt><dd id="resourceMemory">-</dd>
+            <dt>Temp</dt><dd id="resourceTemp">-</dd>
+            <dt>app.py</dt><dd id="resourceApp">-</dd>
+            <dt>ffmpeg</dt><dd id="resourceFfmpeg">-</dd>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <div class="panelHead">
+            <h2>Microphone</h2>
+            <div class="buttonGroup">
+              <button id="recordAudio">Record</button>
+              <button id="detectCry">Detect cry</button>
+            </div>
+          </div>
+          <label class="inlineInput">
+            Seconds
+            <input id="audioSeconds" type="number" min="1" max="10" step="1" value="2" />
+          </label>
+          <audio id="audioPlayer" controls hidden></audio>
+          <dl class="metricsGrid" id="audioMetrics">
+            <dt>Status</dt><dd id="audioStatus">No audio sample</dd>
+            <dt>Engine</dt><dd id="audioEngine">-</dd>
+            <dt>Duration</dt><dd id="audioDuration">-</dd>
+            <dt>RMS</dt><dd id="audioRms">-</dd>
+            <dt>Peak</dt><dd id="audioPeak">-</dd>
+            <dt>dBFS</dt><dd id="audioDbfs">-</dd>
+            <dt>ZCR</dt><dd id="audioZcr">-</dd>
+          </dl>
+          <dl class="metricsGrid" id="yamnetMetrics">
+            <dt>Cry status</dt><dd id="yamnetStatus">No YAMNet sample</dd>
+            <dt>Cry score</dt><dd id="yamnetCryScore">-</dd>
+            <dt>Top sounds</dt><dd id="yamnetTop">-</dd>
+            <dt>YAMNet latency</dt><dd id="yamnetLatency">-</dd>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/static/hls.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

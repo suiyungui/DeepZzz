@@ -1,0 +1,17 @@
+[Unit]
+Description=Day/Night GPIO to IR-CUT Sync
+After=local-fs.target
+
+[Service]
+Type=simple
+User=z
+Group=z
+WorkingDirectory=/home/z/day_night
+ExecStart=/usr/bin/python3 /home/z/day_night/day_night.py sync-ircut
+Restart=always
+RestartSec=2
+StandardOutput=append:/home/z/day_night/logs/sync_day_night_ircut.log
+StandardError=append:/home/z/day_night/logs/sync_day_night_ircut.log
+
+[Install]
+WantedBy=multi-user.target

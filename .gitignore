@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime output
+runtime/
+logs/
+*.log
+*.pid
+
+# Camera/HLS generated media
+hls/
+*.m3u8
+*.ts
+*.mp4
+*.mkv
+*.avi
+*.wav
+
+# Android generated packages
+*.apk
+*.aab
+*.apks
+*.dm
+app/release/
+**/app/release/
+
+# Board sync backups/state
+*.bak-*
+**/state/current_mode
+
+# Local editor/system files
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
