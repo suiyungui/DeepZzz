@@ -27,25 +27,24 @@
         </div>
       </section>
 
-      <section class="panel lowresPanel">
-        <div class="panelHead">
+      <section class="viewer comparePanel lowresPanel">
+        <div class="sectionHead">
           <h2>Lowres Analysis</h2>
-          <button id="refreshSnapshot">Refresh</button>
+          <span id="lowresMeta">waiting</span>
         </div>
-        <div class="lowresCompare">
+        <div class="videoFrame imageFrame">
           <img id="snapshot" alt="" />
-          <div class="skeletonBox">
-            <canvas id="poseModel" width="260" height="260"></canvas>
-          </div>
         </div>
-        <dl class="metricsGrid" id="metrics">
-          <dt>Engine</dt><dd id="metricEngine">-</dd>
-          <dt>Frame</dt><dd id="metricFrame">-</dd>
-          <dt>Updated</dt><dd id="metricUpdated">-</dd>
-          <dt>Latency</dt><dd id="metricLatency">-</dd>
-          <dt>Model active</dt><dd id="metricModelActive">-</dd>
-          <dt>Persons</dt><dd id="metricPersons">-</dd>
-        </dl>
+      </section>
+
+      <section class="viewer comparePanel skeletonPanel">
+        <div class="sectionHead">
+          <h2>Skeleton</h2>
+          <span>confidence</span>
+        </div>
+        <div class="skeletonFrame">
+          <canvas id="poseModel" width="260" height="260"></canvas>
+        </div>
       </section>
 
       <section class="controlPanel">

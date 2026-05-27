@@ -4,6 +4,7 @@ const videoEl = document.getElementById("video");
 const overlayEl = document.getElementById("overlay");
 const poseModelEl = document.getElementById("poseModel");
 const previewMetaEl = document.getElementById("previewMeta");
+const lowresMetaEl = document.getElementById("lowresMeta");
 const personsSummaryEl = document.getElementById("personsSummary");
 const latencySummaryEl = document.getElementById("latencySummary");
 const cpuSummaryEl = document.getElementById("cpuSummary");
@@ -28,15 +29,6 @@ const resourceFields = {
   temp: document.getElementById("resourceTemp"),
   app: document.getElementById("resourceApp"),
   ffmpeg: document.getElementById("resourceFfmpeg"),
-};
-
-const metricFields = {
-  engine: document.getElementById("metricEngine"),
-  frame: document.getElementById("metricFrame"),
-  updated: document.getElementById("metricUpdated"),
-  latency: document.getElementById("metricLatency"),
-  modelActive: document.getElementById("metricModelActive"),
-  persons: document.getElementById("metricPersons"),
 };
 
 const audioFields = {
@@ -181,7 +173,8 @@ function renderRuntime(status) {
   runtimeFields.frames.textContent = `${status.camera.frames} captured / ${status.vision.processed} processed`;
   runtimeFields.vision.textContent = status.vision.running ? status.vision.engine : "stopped";
   runtimeFields.audio.textContent = status.config.audio_device;
-  previewMetaEl.textContent = preview;
+  previewMetaEl.textContent = formatFps(status.config.preview_fps);
+  lowresMetaEl.textContent = formatFps(status.config.analysis_fps);
 }
 
 function renderResources(resources) {
@@ -206,23 +199,21 @@ function renderResources(resources) {
 
 function renderMetrics(result) {
   if (!result) {
-    metricFields.engine.textContent = "waiting";
-    metricFields.frame.textContent = "-";
-    metricFields.updated.textContent = "-";
-    metricFields.latency.textContent = "-";
-    metricFields.modelActive.textContent = "-";
-    metricFields.persons.textContent = "-";
+    personsSummaryEl.textContent = "-";
+    latencySummaryEl.textContent = "-";
     return;
   }
-  const age = result.updated_at ? Math.max(0, Date.now() / 1000 - result.updated_at).toFixed(1) : "-";
-  metricFields.engine.textContent = result.engine || "-";
-  metricFields.frame.textContent = result.frame_size ? `${result.frame_size[0]}x${result.frame_size[1]}` : "-";
-  metricFields.updated.textContent = `${age}s ago`;
-  metricFields.latency.textContent = result.elapsed_ms == null ? "-" : `${result.elapsed_ms} ms`;
-  metricFields.modelActive.textContent = result.model_active ? "yes" : "no";
-  metricFields.persons.textContent = result.persons ? String(result.persons.length) : "0";
   personsSummaryEl.textContent = result.persons ? String(result.persons.length) : "0";
   latencySummaryEl.textContent = result.elapsed_ms == null ? "-" : `${Math.round(result.elapsed_ms)} ms`;
+}
+
+function formatFps(value) {
+  if (value == null || value === "") return "waiting";
+  const number = Number(value);
+  if (Number.isFinite(number)) {
+    return `${number} fps`;
+  }
+  return `${value} fps`;
 }
 
 function formatProcess(process) {
@@ -464,7 +455,6 @@ document.getElementById("cameraStart").addEventListener("click", () => postButto
 document.getElementById("cameraStop").addEventListener("click", () => postButton("/api/camera/stop"));
 document.getElementById("visionStart").addEventListener("click", () => postButton("/api/vision/start"));
 document.getElementById("visionStop").addEventListener("click", () => postButton("/api/vision/stop"));
-document.getElementById("refreshSnapshot").addEventListener("click", refreshSnapshot);
 document.getElementById("recordAudio").addEventListener("click", async () => {
   const seconds = Number(document.getElementById("audioSeconds").value || 2);
   try {
