@@ -28,7 +28,7 @@ ANALYSIS_WIDTH=320 ANALYSIS_FPS=2 bash scripts/start.sh
 ANALYSIS_WIDTH=320 ANALYSIS_FPS=1 VIDEO_DECODER=h264_stcodec bash scripts/start.sh
 ENABLE_POSE=1 ANALYSIS_WIDTH=320 ANALYSIS_FPS=1 VIDEO_DECODER=h264_stcodec bash scripts/start.sh
 PORT=7861 bash scripts/start.sh
-AUDIO_DEVICE=plughw:0,0 bash scripts/start.sh
+AUDIO_DEVICE=plughw:CARD=Device,DEV=0 bash scripts/start.sh
 ```
 
 Stop:
@@ -69,7 +69,7 @@ Validated on the current board:
 
 - HLS preview: `1280x720 @ 30fps`.
 - Low-resolution analysis branch: disabled by default with `ANALYSIS_FPS=0`; enable it when a model is active.
-- Audio capture: `arecord`, `plughw:0,0`, mono `16000 Hz`.
+- Audio capture: `arecord`, USB microphone `plughw:CARD=Device,DEV=0`, mono `16000 Hz`.
 - ONNX Runtime providers: `SpaceMITExecutionProvider`, `CPUExecutionProvider`.
 
 When `ANALYSIS_FPS` is greater than `0`, ffmpeg decodes the preview stream for

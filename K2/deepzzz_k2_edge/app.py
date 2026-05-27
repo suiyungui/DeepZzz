@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import mimetypes
 import os
@@ -8,30 +9,38 @@ import signal
 import subprocess
 import threading
 import time
-import wave
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
-import cv2
 import numpy as np
 
 from deepzzz_k2.audio import record_audio_level
 from deepzzz_k2.camera import CameraPipeline
 from deepzzz_k2.resources import ResourceMonitor
 from deepzzz_k2.vision import VisionWorker
-from deepzzz_k2.yamnet_audio import YamnetCryDetector, record_waveform
+from deepzzz_k2.yamnet_audio import (
+    ContinuousWaveformRecorder,
+    CryStateTracker,
+    YamnetCryDetector,
+    record_waveform,
+    write_waveform,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
 RUNTIME_DIR = BASE_DIR / "runtime"
 HLS_DIR = RUNTIME_DIR / "hls"
 AUDIO_DIR = RUNTIME_DIR / "audio"
 LOG_DIR = RUNTIME_DIR / "logs"
+DAY_NIGHT_SCRIPT = PROJECT_ROOT / "day_night" / "day_night.py"
+DAY_NIGHT_LOG = PROJECT_ROOT / "day_night" / "logs" / "sync_day_night_ircut.log"
+IRCUT_MODE_FILE = PROJECT_ROOT / "ir-cut" / "state" / "current_mode"
 
 mimetypes.add_type("application/vnd.apple.mpegurl", ".m3u8")
 mimetypes.add_type("video/mp2t", ".ts")
@@ -61,12 +70,21 @@ class EdgeState:
         self.started_at = time.time()
         self.resources = ResourceMonitor()
         self.audio_lock = threading.Lock()
+        self.yamnet_lock = threading.Lock()
         self.latest_audio: dict[str, Any] | None = None
         self.latest_yamnet: dict[str, Any] | None = None
         self._yamnet: YamnetCryDetector | None = None
+        self._audio_recorder: ContinuousWaveformRecorder | None = None
+        self._cry_state = CryStateTracker()
+        self._yamnet_checks = 0
+        self._yamnet_checked_at: deque[float] = deque(maxlen=120)
+        self._yamnet_stop = threading.Event()
+        self._yamnet_thread: threading.Thread | None = None
 
     def start(self) -> None:
         self.vision.start()
+        if self.args.enable_yamnet:
+            self.start_yamnet_loop()
         if self.args.start_camera:
             try:
                 self.camera.start()
@@ -74,18 +92,70 @@ class EdgeState:
                 print(f"camera start failed: {exc}", flush=True)
 
     def stop(self) -> None:
+        self.stop_yamnet_loop()
         self.camera.stop()
         self.vision.stop()
 
+    def start_yamnet_loop(self) -> None:
+        if self._yamnet_thread and self._yamnet_thread.is_alive():
+            return
+        self._yamnet_stop.clear()
+        self._yamnet_thread = threading.Thread(target=self._yamnet_loop, name="yamnet-loop", daemon=True)
+        self._yamnet_thread.start()
+
+    def stop_yamnet_loop(self) -> None:
+        self._yamnet_stop.set()
+        if self._yamnet_thread and self._yamnet_thread.is_alive():
+            self._yamnet_thread.join(timeout=2)
+        if self._audio_recorder is not None:
+            self._audio_recorder.stop()
+
+    def _yamnet_loop(self) -> None:
+        while not self._yamnet_stop.is_set():
+            try:
+                self._ensure_audio_recorder()
+                waveform, rate = self._latest_yamnet_window()
+                min_samples = int(self.args.audio_rate * min(1.0, float(self.args.yamnet_seconds)))
+                if waveform.size < min_samples:
+                    previous = self.latest_yamnet or {}
+                    self.latest_yamnet = {
+                        **previous,
+                        "status": "warming",
+                        "capture": self._audio_recorder.status() if self._audio_recorder else None,
+                        "updated_at": time.time(),
+                    }
+                else:
+                    self._analyze_cry_waveform(waveform, rate, save_audio=False)
+            except Exception as exc:
+                self.latest_yamnet = {
+                    "status": "error",
+                    "error": str(exc),
+                    "capture": self._audio_recorder.status() if self._audio_recorder else None,
+                    "updated_at": time.time(),
+                }
+                if self._audio_recorder is not None:
+                    self._audio_recorder.stop()
+                    self._audio_recorder = None
+                if self._yamnet_stop.wait(1.0):
+                    break
+                continue
+            self._yamnet_stop.wait(max(0.1, float(self.args.yamnet_interval)))
+
     def status(self) -> dict[str, Any]:
+        now = time.time()
+        vision = self.vision.status()
+        resources = self.resources.snapshot()
+        yamnet = self.latest_yamnet
         return {
             "ok": True,
-            "uptime_s": round(time.time() - self.started_at, 1),
+            "uptime_s": round(now - self.started_at, 1),
             "camera": self.camera.status(),
-            "vision": self.vision.status(),
-            "resources": self.resources.snapshot(),
+            "vision": vision,
+            "resources": resources,
             "audio": self.latest_audio,
-            "yamnet": self.latest_yamnet,
+            "yamnet": yamnet,
+            "day_night": day_night_status(),
+            "summary": self._summary(vision, yamnet, now),
             "config": {
                 "preview_size": self.args.preview_size,
                 "preview_fps": self.args.preview_fps,
@@ -97,13 +167,33 @@ class EdgeState:
                 "pose_provider": self.args.pose_provider,
                 "audio_device": self.args.audio_device,
                 "yamnet_model": self.args.yamnet_model,
+                "enable_yamnet": self.args.enable_yamnet,
+                "yamnet_seconds": self.args.yamnet_seconds,
+                "yamnet_interval": self.args.yamnet_interval,
             },
+        }
+
+    def _summary(self, vision: dict[str, Any], yamnet: dict[str, Any] | None, now: float) -> dict[str, Any]:
+        latest = vision.get("latest") or {}
+        video_updated_at = latest.get("updated_at")
+        audio_updated_at = yamnet.get("updated_at") if yamnet else None
+        return {
+            "video_age_s": age_seconds(video_updated_at, now),
+            "video_fps": vision.get("actual_fps"),
+            "audio_age_s": age_seconds(audio_updated_at, now),
+            "audio_rate_hz": recent_rate(self._yamnet_checked_at, now=now),
         }
 
     def record_audio(self, seconds: float) -> dict[str, Any]:
         seconds = max(0.5, min(float(seconds), 10.0))
         AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         output = AUDIO_DIR / f"mic_{int(time.time() * 1000)}.wav"
+        if self._audio_recorder and self._audio_recorder.running:
+            waveform, rate = self._audio_recorder.latest_window(seconds)
+            write_waveform(output, waveform, rate)
+            result = self._audio_level_from_waveform(output, waveform, rate)
+            self.latest_audio = result
+            return result
         with self.audio_lock:
             result = record_audio_level(
                 output,
@@ -117,21 +207,149 @@ class EdgeState:
     def analyze_cry(self, seconds: float) -> dict[str, Any]:
         seconds = max(1.0, min(float(seconds), 10.0))
         AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-        output = AUDIO_DIR / f"yamnet_{int(time.time() * 1000)}.wav"
+        if self._audio_recorder and self._audio_recorder.running:
+            waveform, rate = self._audio_recorder.latest_window(seconds)
+            return self._analyze_cry_waveform(waveform, rate, save_audio=True)
         with self.audio_lock:
+            output = AUDIO_DIR / "yamnet_latest.wav"
             waveform, rate = record_waveform(
                 seconds=seconds,
                 device=self.args.audio_device,
                 output=output,
                 sample_rate=self.args.audio_rate,
             )
+            return self._analyze_cry_waveform(waveform, rate, output=output, save_audio=False)
+
+    def _ensure_audio_recorder(self) -> None:
+        if self._audio_recorder is None:
+            buffer_seconds = max(8.0, float(self.args.yamnet_seconds) * 3.0)
+            self._audio_recorder = ContinuousWaveformRecorder(
+                device=self.args.audio_device,
+                sample_rate=self.args.audio_rate,
+                buffer_seconds=buffer_seconds,
+                chunk_seconds=max(0.05, min(0.25, float(self.args.yamnet_interval))),
+            )
+        if not self._audio_recorder.running:
+            self._audio_recorder.start()
+
+    def _latest_yamnet_window(self) -> tuple[np.ndarray, int]:
+        if self._audio_recorder is None:
+            raise RuntimeError("audio recorder is not initialized")
+        return self._audio_recorder.latest_window(self.args.yamnet_seconds)
+
+    def _analyze_cry_waveform(
+        self,
+        waveform: np.ndarray,
+        rate: int,
+        output: Path | None = None,
+        save_audio: bool = True,
+    ) -> dict[str, Any]:
+        if output is None:
+            output = AUDIO_DIR / "yamnet_latest.wav"
+        if save_audio:
+            write_waveform(output, waveform, rate)
+        with self.yamnet_lock:
             if self._yamnet is None:
                 self._yamnet = YamnetCryDetector(self.args.yamnet_model, self.args.yamnet_labels)
             result = self._yamnet.infer_waveform(waveform, rate)
-            result["file"] = str(output)
-            result["audio_url"] = f"/audio/{output.name}"
-            self.latest_yamnet = result
-            return result
+            result.update(self._cry_state.update(float(result["cry_score"])))
+            self._yamnet_checks += 1
+            self._yamnet_checked_at.append(time.time())
+            result["checks"] = self._yamnet_checks
+        result["file"] = str(output)
+        result["audio_url"] = f"/audio/{output.name}"
+        result["status"] = "ok"
+        result["capture"] = self._audio_recorder.status() if self._audio_recorder else None
+        self.latest_yamnet = result
+        return result
+
+    def _audio_level_from_waveform(self, output: Path, waveform: np.ndarray, rate: int) -> dict[str, Any]:
+        if waveform.size == 0:
+            rms = peak = zero_crossing_rate = 0.0
+        else:
+            rms = float(np.sqrt(np.mean(waveform * waveform)))
+            peak = float(np.max(np.abs(waveform)))
+            signs = np.signbit(waveform)
+            zero_crossing_rate = float(np.count_nonzero(signs[1:] != signs[:-1]) / max(1, len(signs) - 1))
+        dbfs = -120.0 if rms <= 1e-8 else 20.0 * float(np.log10(rms))
+        return {
+            "file": str(output),
+            "audio_url": f"/audio/{output.name}",
+            "sample_rate": rate,
+            "duration_s": round(waveform.size / max(1, rate), 3),
+            "elapsed_ms": 0,
+            "rms": round(rms, 5),
+            "peak": round(peak, 5),
+            "dbfs": round(dbfs, 2),
+            "zero_crossing_rate": round(zero_crossing_rate, 5),
+            "engine": "continuous_level_meter",
+        }
+
+
+def day_night_status() -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "state": "unknown",
+        "source": "unavailable",
+        "updated_at": time.time(),
+    }
+    try:
+        for line in reversed(DAY_NIGHT_LOG.read_text(encoding="utf-8", errors="replace").splitlines()):
+            value = line.strip()
+            if value in {"day", "night"}:
+                status.update({"state": value, "source": "day_night_sync_log"})
+                return status
+    except OSError as exc:
+        status["error"] = str(exc)
+
+    try:
+        value = IRCUT_MODE_FILE.read_text(encoding="utf-8").strip()
+        if value in {"day", "night", "off"}:
+            status.update({"state": value, "source": "ircut_saved_mode"})
+            return status
+    except OSError as exc:
+        status["error"] = str(exc)
+
+    if DAY_NIGHT_SCRIPT.exists():
+        try:
+            completed = subprocess.run(
+                ["python3", str(DAY_NIGHT_SCRIPT), "status"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=1.0,
+            )
+            value = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+            if completed.returncode == 0 and value in {"day", "night"}:
+                status.update({"state": value, "source": "gpio35"})
+                return status
+            if completed.stderr.strip():
+                status["error"] = completed.stderr.strip()
+        except Exception as exc:
+            status["error"] = str(exc)
+    return status
+
+
+def age_seconds(epoch_seconds: Any, now: float | None = None) -> float | None:
+    try:
+        value = float(epoch_seconds)
+    except (TypeError, ValueError):
+        return None
+    now = time.time() if now is None else now
+    age = now - value
+    if age < 0:
+        return None
+    return round(age, 3)
+
+
+def recent_rate(timestamps: deque[float], now: float | None = None, window_s: float = 5.0) -> float | None:
+    now = time.time() if now is None else now
+    recent = [value for value in timestamps if now - value <= window_s]
+    if len(recent) < 2:
+        return None
+    span = recent[-1] - recent[0]
+    if span <= 0:
+        return None
+    return round((len(recent) - 1) / span, 2)
 
 
 STATE: EdgeState | None = None
@@ -269,6 +487,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audio-rate", type=int, default=int(os.environ.get("AUDIO_RATE", "16000")))
     parser.add_argument("--yamnet-model", default=os.environ.get("YAMNET_MODEL", "models/yamnet/yamnet.onnx"))
     parser.add_argument("--yamnet-labels", default=os.environ.get("YAMNET_LABELS", "models/yamnet/yamnet_class_map.csv"))
+    parser.add_argument("--enable-yamnet", action="store_true", default=os.environ.get("ENABLE_YAMNET", "1") == "1")
+    parser.add_argument("--yamnet-seconds", type=float, default=float(os.environ.get("YAMNET_SECONDS", "2")))
+    parser.add_argument("--yamnet-interval", type=float, default=float(os.environ.get("YAMNET_INTERVAL", "0.5")))
     parser.add_argument("--pose-model", default=os.environ.get("POSE_MODEL", "/home/z/.brdk_models/pose/yolov8n-pose-320.onnx"))
     parser.add_argument("--pose-provider", default=os.environ.get("POSE_PROVIDER", "CPUExecutionProvider"))
     parser.add_argument("--enable-pose", action="store_true", default=os.environ.get("ENABLE_POSE", "0") == "1")

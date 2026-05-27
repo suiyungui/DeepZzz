@@ -5,49 +5,41 @@ const overlayEl = document.getElementById("overlay");
 const poseModelEl = document.getElementById("poseModel");
 const previewMetaEl = document.getElementById("previewMeta");
 const lowresMetaEl = document.getElementById("lowresMeta");
-const personsSummaryEl = document.getElementById("personsSummary");
-const latencySummaryEl = document.getElementById("latencySummary");
+const videoAgeSummaryEl = document.getElementById("videoAgeSummary");
+const videoFpsSummaryEl = document.getElementById("videoFpsSummary");
+const audioRateSummaryEl = document.getElementById("audioRateSummary");
+const audioAgeSummaryEl = document.getElementById("audioAgeSummary");
 const cpuSummaryEl = document.getElementById("cpuSummary");
-const appSummaryEl = document.getElementById("appSummary");
-const audioPlayerEl = document.getElementById("audioPlayer");
+const memorySummaryEl = document.getElementById("memorySummary");
+const dayNightSummaryEl = document.getElementById("dayNightSummary");
 
-const runtimeFields = {
-  camera: document.getElementById("runtimeCamera"),
-  device: document.getElementById("runtimeDevice"),
-  hls: document.getElementById("runtimeHls"),
-  preview: document.getElementById("runtimePreview"),
-  analysis: document.getElementById("runtimeAnalysis"),
-  frames: document.getElementById("runtimeFrames"),
-  vision: document.getElementById("runtimeVision"),
-  audio: document.getElementById("runtimeAudio"),
+const deviceFields = {
+  camera: document.getElementById("deviceCamera"),
+  video: document.getElementById("deviceVideo"),
+  analysis: document.getElementById("deviceAnalysis"),
+  mic: document.getElementById("deviceMic"),
+  audio: document.getElementById("deviceAudio"),
+  cry: document.getElementById("deviceCry"),
 };
 
 const resourceFields = {
   cpu: document.getElementById("resourceCpu"),
-  load: document.getElementById("resourceLoad"),
   memory: document.getElementById("resourceMemory"),
   temp: document.getElementById("resourceTemp"),
   app: document.getElementById("resourceApp"),
   ffmpeg: document.getElementById("resourceFfmpeg"),
 };
 
-const audioFields = {
-  status: document.getElementById("audioStatus"),
-  engine: document.getElementById("audioEngine"),
-  duration: document.getElementById("audioDuration"),
-  rms: document.getElementById("audioRms"),
-  peak: document.getElementById("audioPeak"),
-  dbfs: document.getElementById("audioDbfs"),
-  zcr: document.getElementById("audioZcr"),
-};
-
 const yamnetFields = {
   status: document.getElementById("yamnetStatus"),
   cryScore: document.getElementById("yamnetCryScore"),
+  window: document.getElementById("yamnetWindow"),
   top: document.getElementById("yamnetTop"),
   latency: document.getElementById("yamnetLatency"),
 };
 
+const cryPanelEl = document.getElementById("cryDetectionPanel");
+const cryLoopStateEl = document.getElementById("cryLoopState");
 const coverPanelEl = document.getElementById("faceCoverPanel");
 const coverFields = {
   status: document.getElementById("coverStatus"),
@@ -62,6 +54,14 @@ const coverFields = {
 
 let latestDetections = null;
 let hls = null;
+let analysisFpsText = "waiting";
+let snapshotRefreshMs = 500;
+let snapshotTimer = null;
+
+// HD Preview should currently be a clean video stream only.
+// Keep the overlay canvas and drawOverlay() implementation intact so the pose
+// boxes/skeleton can be restored later by changing this flag to true.
+const ENABLE_HD_POSE_OVERLAY = false;
 
 const POSE_CONNECTIONS = [
   [16, 14], [14, 12], [15, 13], [13, 11], [12, 11],
@@ -125,10 +125,12 @@ function connectHls() {
   }
   if (window.Hls && Hls.isSupported()) {
     hls = new Hls({
-      liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 6,
+      // HLS segments are 1s on the server. Keep the browser close to the live
+      // edge; raise these counts again if the LAN preview becomes unstable.
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 2,
       lowLatencyMode: true,
-      maxLiveSyncPlaybackRate: 1.1,
+      maxLiveSyncPlaybackRate: 1.2,
     });
     hls.loadSource(source);
     hls.attachMedia(videoEl);
@@ -164,17 +166,20 @@ async function api(path, options = {}) {
 }
 
 function renderRuntime(status) {
-  const preview = `${status.config.preview_size} @ ${status.config.preview_fps}fps`;
-  runtimeFields.camera.textContent = status.camera.running ? "running" : "stopped";
-  runtimeFields.device.textContent = status.camera.device || "-";
-  runtimeFields.hls.textContent = status.camera.hls_ready ? "ready" : "waiting";
-  runtimeFields.preview.textContent = preview;
-  runtimeFields.analysis.textContent = `${status.config.analysis_width}px @ ${status.config.analysis_fps}fps`;
-  runtimeFields.frames.textContent = `${status.camera.frames} captured / ${status.vision.processed} processed`;
-  runtimeFields.vision.textContent = status.vision.running ? status.vision.engine : "stopped";
-  runtimeFields.audio.textContent = status.config.audio_device;
-  previewMetaEl.textContent = formatFps(status.config.preview_fps);
-  lowresMetaEl.textContent = formatFps(status.config.analysis_fps);
+  analysisFpsText = formatFps(status.config.analysis_fps);
+  snapshotRefreshMs = analysisSnapshotInterval(status.config.analysis_fps);
+  deviceFields.camera.textContent = status.camera.running ? `connected (${shortDevice(status.camera.device)})` : "not running";
+  deviceFields.video.textContent = status.camera.hls_ready ? "video stream ready" : "waiting for video";
+  deviceFields.analysis.textContent = status.camera.frames > 0 ? `${status.camera.frames} captured / ${status.vision.processed} processed` : "waiting for frame";
+  deviceFields.mic.textContent = status.config.audio_device || "not configured";
+  deviceFields.audio.textContent = audioSampleStatus(status.yamnet);
+  deviceFields.cry.textContent = status.config.enable_yamnet ? "running" : "disabled";
+  previewMetaEl.textContent = `${status.config.preview_size} / ${formatFps(status.config.preview_fps)}`;
+  lowresMetaEl.textContent = `${status.config.analysis_width}px / ${analysisFpsText}`;
+  yamnetFields.window.textContent = `${status.config.yamnet_seconds}s`;
+  renderSummary(status.summary);
+  renderDayNight(status.day_night);
+  renderYamnet(status.yamnet);
 }
 
 function renderResources(resources) {
@@ -183,28 +188,61 @@ function renderResources(resources) {
     return;
   }
   const memory = resources.memory || {};
-  const load = resources.loadavg || [];
   const processes = resources.processes || [];
   const appProcess = processes.find((process) => process.name === "app.py");
   const ffmpegProcess = processes.find((process) => process.name === "ffmpeg");
   resourceFields.cpu.textContent = resources.cpu_percent == null ? "warming up" : `${resources.cpu_percent}% / ${resources.cpu_count} cores`;
-  resourceFields.load.textContent = load.length ? load.join(" / ") : "-";
   resourceFields.memory.textContent = memory.total_mb ? `${memory.used_mb} / ${memory.total_mb} MB (${memory.percent}%)` : "-";
   resourceFields.temp.textContent = resources.temperature_c == null ? "-" : `${resources.temperature_c} C`;
   resourceFields.app.textContent = formatProcess(appProcess);
   resourceFields.ffmpeg.textContent = formatProcess(ffmpegProcess);
   cpuSummaryEl.textContent = resources.cpu_percent == null ? "-" : `${resources.cpu_percent}%`;
-  appSummaryEl.textContent = appProcess && appProcess.cpu_percent != null ? `${appProcess.cpu_percent}%` : "-";
+  memorySummaryEl.textContent = memory.percent == null ? "-" : `${memory.percent}%`;
+}
+
+function shortDevice(device) {
+  if (!device) return "camera";
+  const parts = String(device).split("/");
+  return parts[parts.length - 1] || device;
+}
+
+function audioSampleStatus(yamnet) {
+  if (!yamnet) return "waiting for audio";
+  if (yamnet.status === "recording" || yamnet.status === "warming") return "recording";
+  if (yamnet.status === "error") return "audio error";
+  if (yamnet.capture && yamnet.capture.buffer_seconds != null) return `${yamnet.capture.buffer_seconds}s buffered`;
+  return "audio captured";
 }
 
 function renderMetrics(result) {
   if (!result) {
-    personsSummaryEl.textContent = "-";
-    latencySummaryEl.textContent = "-";
     return;
   }
-  personsSummaryEl.textContent = result.persons ? String(result.persons.length) : "0";
-  latencySummaryEl.textContent = result.elapsed_ms == null ? "-" : `${Math.round(result.elapsed_ms)} ms`;
+  if (result.frame_size) {
+    lowresMetaEl.textContent = `${result.frame_size[0]}x${result.frame_size[1]} / ${analysisFpsText}`;
+  }
+}
+
+function renderSummary(summary) {
+  if (!summary) {
+    videoAgeSummaryEl.textContent = "-";
+    videoFpsSummaryEl.textContent = "-";
+    audioAgeSummaryEl.textContent = "-";
+    audioRateSummaryEl.textContent = "-";
+    return;
+  }
+  videoAgeSummaryEl.textContent = formatSeconds(summary.video_age_s);
+  videoFpsSummaryEl.textContent = formatRate(summary.video_fps, "fps");
+  audioAgeSummaryEl.textContent = formatSeconds(summary.audio_age_s);
+  audioRateSummaryEl.textContent = formatRate(summary.audio_rate_hz, "/s");
+}
+
+function renderDayNight(dayNight) {
+  if (!dayNight || !dayNight.state || dayNight.state === "unknown") {
+    dayNightSummaryEl.textContent = "-";
+    return;
+  }
+  dayNightSummaryEl.textContent = dayNight.state;
 }
 
 function formatFps(value) {
@@ -214,6 +252,25 @@ function formatFps(value) {
     return `${number} fps`;
   }
   return `${value} fps`;
+}
+
+function analysisSnapshotInterval(fps) {
+  const value = Number(fps);
+  if (!Number.isFinite(value) || value <= 0) return 1000;
+  return Math.max(250, Math.round(1000 / value));
+}
+
+function formatSeconds(value) {
+  const ageSeconds = Number(value);
+  if (!Number.isFinite(ageSeconds) || ageSeconds < 0) return "-";
+  if (ageSeconds < 1) return `${Math.round(ageSeconds * 1000)} ms`;
+  return `${ageSeconds.toFixed(1)} s`;
+}
+
+function formatRate(value, unit) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `${number.toFixed(1)} ${unit}`;
 }
 
 function formatProcess(process) {
@@ -331,6 +388,50 @@ function formatFacePoint(point) {
   return `${point.present ? "visible" : "missing"} (${point.confidence.toFixed(2)})`;
 }
 
+function setCryPanel(mode, status) {
+  cryPanelEl.classList.remove("covered", "clear", "caution");
+  cryPanelEl.classList.add(mode);
+  yamnetFields.status.textContent = status;
+}
+
+function renderYamnet(result) {
+  if (!result) {
+    cryLoopStateEl.textContent = "waiting";
+    setCryPanel("caution", "Waiting for sample");
+    return;
+  }
+  if (result.status === "recording") {
+    cryLoopStateEl.textContent = "active";
+    setCryPanel("caution", "Recording...");
+    return;
+  }
+  if (result.status === "warming") {
+    cryLoopStateEl.textContent = "active";
+    setCryPanel("caution", "Buffering audio...");
+    yamnetFields.cryScore.textContent = result.cry_score == null ? "-" : String(result.cry_score);
+    return;
+  }
+  if (result.status === "error") {
+    cryLoopStateEl.textContent = "error";
+    setCryPanel("caution", result.error || "Audio detection error");
+    return;
+  }
+  cryLoopStateEl.textContent = "active";
+  setCryPanel(result.crying ? "covered" : "clear", result.crying ? "Crying suspected" : "No crying detected");
+  if (result.cry_score == null) {
+    yamnetFields.cryScore.textContent = "-";
+  } else if (result.cry_score_smooth == null) {
+    yamnetFields.cryScore.textContent = String(result.cry_score);
+  } else {
+    yamnetFields.cryScore.textContent = `${result.cry_score} / smooth ${result.cry_score_smooth}`;
+  }
+  yamnetFields.latency.textContent = result.elapsed_ms == null ? "-" : `${result.elapsed_ms} ms`;
+  yamnetFields.top.textContent = (result.top || [])
+    .slice(0, 5)
+    .map((item) => `${item.label} ${item.score}`)
+    .join(", ");
+}
+
 function drawConfidenceLabel(ctx, index, confidence, active, face) {
   const [x, y] = STANDARD_POSE[index];
   const [dx, dy] = CONFIDENCE_LABEL_OFFSETS[index];
@@ -376,6 +477,7 @@ function drawOverlay() {
   overlayEl.height = Math.max(1, Math.round(rect.height * dpr));
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, rect.width, rect.height);
+  if (!ENABLE_HD_POSE_OVERLAY) return;
   const result = latestDetections;
   if (!result || !result.frame_size || !result.persons) return;
   const [sourceW, sourceH] = result.frame_size;
@@ -431,6 +533,8 @@ async function refresh() {
     renderMetrics(latestDetections);
     drawPoseModel(latestDetections);
     renderFaceCover(latestDetections);
+    // HD overlay is intentionally disabled for now. drawOverlay() still clears
+    // the canvas and keeps the old drawing path ready for later restoration.
     drawOverlay();
   } catch (err) {
     setStatus(err.message);
@@ -441,64 +545,19 @@ function refreshSnapshot() {
   snapshotEl.src = `/api/snapshot?t=${Date.now()}`;
 }
 
-async function postButton(path, after) {
-  try {
-    await api(path, { method: "POST", body: "{}" });
-    if (after) after();
-    await refresh();
-  } catch (err) {
-    setStatus(err.message);
+function scheduleSnapshotRefresh(delay = snapshotRefreshMs) {
+  if (snapshotTimer) {
+    window.clearTimeout(snapshotTimer);
   }
+  snapshotTimer = window.setTimeout(refreshSnapshot, delay);
 }
 
-document.getElementById("cameraStart").addEventListener("click", () => postButton("/api/camera/start", connectHls));
-document.getElementById("cameraStop").addEventListener("click", () => postButton("/api/camera/stop"));
-document.getElementById("visionStart").addEventListener("click", () => postButton("/api/vision/start"));
-document.getElementById("visionStop").addEventListener("click", () => postButton("/api/vision/stop"));
-document.getElementById("recordAudio").addEventListener("click", async () => {
-  const seconds = Number(document.getElementById("audioSeconds").value || 2);
-  try {
-    const payload = await api("/api/audio/record", { method: "POST", body: JSON.stringify({ seconds }) });
-    const result = payload.result;
-    audioFields.status.textContent = "Recorded";
-    audioFields.engine.textContent = result.engine;
-    audioFields.duration.textContent = `${result.duration_s}s`;
-    audioFields.rms.textContent = result.rms;
-    audioFields.peak.textContent = result.peak;
-    audioFields.dbfs.textContent = result.dbfs;
-    audioFields.zcr.textContent = result.zero_crossing_rate;
-    audioPlayerEl.src = `${result.audio_url}?t=${Date.now()}`;
-    audioPlayerEl.hidden = false;
-  } catch (err) {
-    audioFields.status.textContent = err.message;
-  }
-});
-
-document.getElementById("detectCry").addEventListener("click", async () => {
-  const seconds = Number(document.getElementById("audioSeconds").value || 2);
-  yamnetFields.status.textContent = "Recording...";
-  try {
-    const payload = await api("/api/audio/yamnet", { method: "POST", body: JSON.stringify({ seconds }) });
-    const result = payload.result;
-    yamnetFields.status.textContent = result.crying ? "Crying suspected" : "No crying detected";
-    yamnetFields.cryScore.textContent = String(result.cry_score);
-    yamnetFields.latency.textContent = `${result.elapsed_ms} ms`;
-    yamnetFields.top.textContent = (result.top || [])
-      .slice(0, 5)
-      .map((item) => `${item.label} ${item.score}`)
-      .join(", ");
-    audioPlayerEl.src = `${result.audio_url}?t=${Date.now()}`;
-    audioPlayerEl.hidden = false;
-  } catch (err) {
-    yamnetFields.status.textContent = err.message;
-  }
-});
-
 window.addEventListener("resize", drawOverlay);
+snapshotEl.addEventListener("load", () => scheduleSnapshotRefresh());
+snapshotEl.addEventListener("error", () => scheduleSnapshotRefresh(1000));
 connectHls();
 drawPoseModel(null);
 renderFaceCover(null);
 refresh();
 refreshSnapshot();
 setInterval(refresh, 1000);
-setInterval(refreshSnapshot, 2000);

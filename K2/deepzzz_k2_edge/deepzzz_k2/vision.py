@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import threading
 import time
 from typing import Any
@@ -26,6 +27,7 @@ class VisionWorker:
         self._latest_jpeg: bytes | None = None
         self._running = False
         self._processed = 0
+        self._processed_at: deque[float] = deque(maxlen=120)
         self._model_path = model_path
         self._model_enabled = enabled
         self._provider = provider
@@ -66,10 +68,12 @@ class VisionWorker:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            now = time.time()
             return {
                 "running": self._running,
                 "engine": "yolov8n_pose_cpu" if self._model_enabled else "lowres_sampler",
                 "processed": self._processed,
+                "actual_fps": recent_rate(self._processed_at, now=now),
                 "latest": self._latest,
                 "model_enabled": self._model_enabled,
                 "model_path": self._model_path,
@@ -93,6 +97,7 @@ class VisionWorker:
                 result, preview = self._sample(frame, meta)
             ok, encoded = cv2.imencode(".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, 78])
             with self._lock:
+                self._processed_at.append(time.time())
                 self._processed += 1
                 self._latest = result
                 self._latest_jpeg = encoded.tobytes() if ok else None
@@ -129,3 +134,14 @@ class VisionWorker:
             result, preview = self._sample(frame, meta)
             result["error"] = str(exc)
             return result, preview
+
+
+def recent_rate(timestamps: deque[float], now: float | None = None, window_s: float = 5.0) -> float | None:
+    now = time.time() if now is None else now
+    recent = [value for value in timestamps if now - value <= window_s]
+    if len(recent) < 2:
+        return None
+    span = recent[-1] - recent[0]
+    if span <= 0:
+        return None
+    return round((len(recent) - 1) / span, 2)
