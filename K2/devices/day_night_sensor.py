@@ -1,0 +1,42 @@
+import time
+from pathlib import Path
+from typing import Any
+
+from utils.paths import DAY_NIGHT_LOG, DAY_NIGHT_SCRIPT, DAY_NIGHT_STATE_FILE, IRCUT_MODE_FILE
+
+
+def day_night_status() -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "state": "unknown",
+        "source": "unavailable",
+        "updated_at": time.time(),
+    }
+    try:
+        value = DAY_NIGHT_STATE_FILE.read_text(encoding="utf-8").strip()
+        if value in {"day", "night"}:
+            status.update({"state": value, "source": "day_night_state_file"})
+            return status
+    except OSError as exc:
+        status["error"] = str(exc)
+
+    try:
+        for line in reversed(DAY_NIGHT_LOG.read_text(encoding="utf-8", errors="replace").splitlines()):
+            value = line.strip()
+            if value in {"day", "night"}:
+                status.update({"state": value, "source": "day_night_sync_log"})
+                return status
+    except OSError as exc:
+        status["error"] = str(exc)
+
+    try:
+        value = IRCUT_MODE_FILE.read_text(encoding="utf-8").strip()
+        if value in {"day", "night", "off"}:
+            status.update({"state": value, "source": "ircut_saved_mode"})
+            return status
+    except OSError as exc:
+        status["error"] = str(exc)
+    return status
+
+
+def legacy_day_night_script() -> Path:
+    return DAY_NIGHT_SCRIPT

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DeepZZZ K2 Edge</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>DeepZZZ K2 Edge</h1>
+        <p>高画质预览和低帧率识别分流运行</p>
+      </div>
+      <div class="status" id="status">connecting</div>
+    </header>
+
+    <main class="workspace">
+      <section class="viewer comparePanel">
+        <div class="sectionHead">
+          <h2>HD Preview</h2>
+          <span id="previewMeta">waiting</span>
+        </div>
+        <div class="videoFrame">
+          <video id="video" autoplay muted playsinline controls></video>
+          <canvas id="overlay"></canvas>
+        </div>
+      </section>
+
+      <section class="viewer comparePanel lowresPanel">
+        <div class="sectionHead">
+          <h2>Lowres Analysis</h2>
+          <span id="lowresMeta">waiting</span>
+        </div>
+        <div class="videoFrame imageFrame">
+          <img id="snapshot" alt="" />
+        </div>
+      </section>
+
+      <section class="viewer comparePanel skeletonPanel">
+        <div class="sectionHead">
+          <h2>Skeleton</h2>
+          <span>confidence</span>
+        </div>
+        <div class="skeletonFrame">
+          <canvas id="poseModel" width="260" height="260"></canvas>
+        </div>
+      </section>
+
+      <section class="controlPanel">
+        <div class="summaryGrid">
+          <div class="summaryItem">
+            <div class="summaryMetric">
+              <span>画面延迟</span>
+              <strong id="videoAgeSummary">-</strong>
+            </div>
+            <div class="summaryMetric">
+              <span>画面帧率</span>
+              <strong id="videoFpsSummary">-</strong>
+            </div>
+          </div>
+          <div class="summaryItem">
+            <div class="summaryMetric">
+              <span>音频延迟</span>
+              <strong id="audioAgeSummary">-</strong>
+            </div>
+            <div class="summaryMetric">
+              <span>音频帧率</span>
+              <strong id="audioRateSummary">-</strong>
+            </div>
+          </div>
+          <div class="summaryItem">
+            <div class="summaryMetric">
+              <span>CPU</span>
+              <strong id="cpuSummary">-</strong>
+            </div>
+            <div class="summaryMetric">
+              <span>内存</span>
+              <strong id="memorySummary">-</strong>
+            </div>
+          </div>
+          <div class="summaryItem">
+            <div class="summaryMetric">
+              <span>NPU</span>
+              <strong id="npuSummary">-</strong>
+            </div>
+            <div class="summaryMetric">
+              <span>昼夜</span>
+              <strong id="dayNightSummary">-</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="alertGrid">
+        <section class="alertPanel panel" id="faceCoverPanel">
+          <h2>Face Cover / Rollover Detection</h2>
+          <dl class="metricsGrid">
+            <dt>Status</dt><dd id="coverStatus">waiting</dd>
+            <dt>Reason</dt><dd id="coverReason">-</dd>
+            <dt>Visible face points</dt><dd id="coverVisiblePoints">-</dd>
+            <dt>Nose</dt><dd id="coverNose">-</dd>
+            <dt>Left eye</dt><dd id="coverLeftEye">-</dd>
+            <dt>Right eye</dt><dd id="coverRightEye">-</dd>
+            <dt>Left ear</dt><dd id="coverLeftEar">-</dd>
+            <dt>Right ear</dt><dd id="coverRightEar">-</dd>
+          </dl>
+        </section>
+
+        <section class="alertPanel panel caution" id="cryDetectionPanel">
+          <div class="panelHead">
+            <h2>Cry Detection</h2>
+            <span id="cryLoopState">auto</span>
+          </div>
+          <dl class="metricsGrid" id="yamnetMetrics">
+            <dt>Cry status</dt><dd id="yamnetStatus">No YAMNet sample</dd>
+            <dt>Cry score</dt><dd id="yamnetCryScore">-</dd>
+            <dt>Window</dt><dd id="yamnetWindow">-</dd>
+            <dt>Top sounds</dt><dd id="yamnetTop">-</dd>
+            <dt>YAMNet latency</dt><dd id="yamnetLatency">-</dd>
+          </dl>
+        </section>
+      </div>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Device</h2>
+          <dl id="device">
+            <dt>Camera</dt><dd id="deviceCamera">-</dd>
+            <dt>Video</dt><dd id="deviceVideo">-</dd>
+            <dt>Lowres frame</dt><dd id="deviceAnalysis">-</dd>
+            <dt>Microphone</dt><dd id="deviceMic">-</dd>
+            <dt>Audio sample</dt><dd id="deviceAudio">-</dd>
+            <dt>Cry detector</dt><dd id="deviceCry">-</dd>
+          </dl>
+        </section>
+
+        <section class="panel">
+          <h2>Resources</h2>
+          <dl id="resources">
+            <dt>CPU</dt><dd id="resourceCpu">-</dd>
+            <dt>Memory</dt><dd id="resourceMemory">-</dd>
+            <dt>Temp</dt><dd id="resourceTemp">-</dd>
+            <dt>main.py</dt><dd id="resourceApp">-</dd>
+            <dt>ffmpeg</dt><dd id="resourceFfmpeg">-</dd>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/static/hls.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
