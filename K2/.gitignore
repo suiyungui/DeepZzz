@@ -1,3 +1,10 @@
 __pycache__/
 *.py[cod]
 runtime/
+runtime_test_audio/
+devices/am2301_reader
+*.o
+pre-rebuild-working-tree*.patch
+pre-rebuild-working-tree*.txt
+pre-audio-playback-working-tree*.patch
+pre-audio-playback-working-tree*.txt

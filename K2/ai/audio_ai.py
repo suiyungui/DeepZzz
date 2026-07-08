@@ -168,11 +168,13 @@ class ContinuousWaveformRecorder:
         self._chunk_bytes -= self._chunk_bytes % self._bytes_per_sample
         self._buffer = bytearray()
         self._lock = threading.Lock()
+        self._data_ready = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._process: subprocess.Popen[bytes] | None = None
         self._thread: threading.Thread | None = None
         self._started_at = 0.0
         self._last_audio_at = 0.0
+        self._total_bytes = 0
         self._error: str | None = None
 
     def start(self) -> None:
@@ -184,6 +186,7 @@ class ContinuousWaveformRecorder:
             self._error = None
             self._started_at = time.time()
             self._last_audio_at = 0.0
+            self._total_bytes = 0
         self._stop.clear()
         command = [
             "arecord",
@@ -240,6 +243,36 @@ class ContinuousWaveformRecorder:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         return samples, self.sample_rate
 
+    def live_position(self) -> int:
+        with self._lock:
+            return self._total_bytes
+
+    def read_pcm_since(self, position: int, max_bytes: int, timeout: float = 1.0) -> tuple[bytes, int]:
+        max_bytes = max(self._bytes_per_sample, int(max_bytes))
+        max_bytes -= max_bytes % self._bytes_per_sample
+        deadline = time.time() + max(0.0, float(timeout))
+        with self._data_ready:
+            while self._total_bytes <= position and not self._error and self.running:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                self._data_ready.wait(timeout=remaining)
+
+            if self._error:
+                raise RuntimeError(self._error)
+
+            buffer_start = self._total_bytes - len(self._buffer)
+            position = max(int(position), buffer_start)
+            available = self._total_bytes - position
+            if available <= 0:
+                return b"", self._total_bytes
+
+            byte_count = min(max_bytes, available)
+            byte_count -= byte_count % self._bytes_per_sample
+            offset = position - buffer_start
+            data = bytes(self._buffer[offset : offset + byte_count])
+            return data, position + len(data)
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             buffered_seconds = len(self._buffer) / (self.sample_rate * self._bytes_per_sample)
@@ -279,7 +312,9 @@ class ContinuousWaveformRecorder:
                 self._buffer.extend(chunk)
                 if len(self._buffer) > self._max_bytes:
                     del self._buffer[: len(self._buffer) - self._max_bytes]
+                self._total_bytes += len(chunk)
                 self._last_audio_at = time.time()
+                self._data_ready.notify_all()
 
 
 def record_waveform(seconds: float, device: str, output: Path, sample_rate: int = 16000) -> tuple[np.ndarray, int]:

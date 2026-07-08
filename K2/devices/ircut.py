@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 import time
 
+from k2edge.runtime_store import write_json
 from utils.paths import IRCUT_MODE_FILE
 
 
@@ -64,5 +65,4 @@ def run_ircut_action(
 
 
 def write_ircut_mode(mode: str) -> None:
-    IRCUT_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    IRCUT_MODE_FILE.write_text(f"{mode}\n", encoding="utf-8")
+    write_json(IRCUT_MODE_FILE, {"mode": mode, "updated_at": time.time()})

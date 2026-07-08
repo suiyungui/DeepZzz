@@ -13,6 +13,7 @@ from devices.v4l2_controls import (
     DEFAULT_NIGHT_SATURATION,
     sync_day_night_saturation,
 )
+from k2edge.runtime_store import write_json
 from utils.paths import DAY_NIGHT_STATE_FILE, IRCUT_SCRIPT
 
 
@@ -60,8 +61,7 @@ def sync_ircut(
 
 
 def write_day_night_state(state: str) -> None:
-    DAY_NIGHT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DAY_NIGHT_STATE_FILE.write_text(f"{state}\n", encoding="utf-8")
+    write_json(DAY_NIGHT_STATE_FILE, {"state": state, "updated_at": time.time()})
 
 
 def watch_day_night(

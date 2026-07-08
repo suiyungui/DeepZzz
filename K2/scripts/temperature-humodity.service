@@ -1,0 +1,20 @@
+[Unit]
+Description=DeepZZZ K2 Temperature Humidity Worker
+After=local-fs.target
+
+[Service]
+Type=simple
+User=z
+Group=z
+WorkingDirectory=/home/z
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/z
+ExecStartPre=/usr/bin/gcc -O2 -Wall -Wextra -o /home/z/devices/am2301_reader /home/z/devices/am2301_reader.c
+ExecStart=/usr/bin/python3 /home/z/devices/temperature_humodity.py --gpio 92 --chip gpiochip0 --interval-ms 2500 --pull-up --attempts 3 --retry-ms 2300
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

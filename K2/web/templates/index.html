@@ -30,17 +30,23 @@
       <section class="viewer comparePanel lowresPanel">
         <div class="sectionHead">
           <h2>Lowres Analysis</h2>
+          <span id="sleepState" class="sleepState asleep">asleep</span>
+          <div class="zoneTools">
+            <button type="button" id="zoneSafeButton">安全区域</button>
+            <button type="button" id="zoneDangerButton">危险区域</button>
+            <button type="button" id="zoneClearButton">清空</button>
+          </div>
           <span id="lowresMeta">waiting</span>
         </div>
         <div class="videoFrame imageFrame">
           <img id="snapshot" alt="" />
+          <canvas id="zoneOverlay"></canvas>
         </div>
       </section>
 
       <section class="viewer comparePanel skeletonPanel">
         <div class="sectionHead">
           <h2>Skeleton</h2>
-          <span>confidence</span>
         </div>
         <div class="skeletonFrame">
           <canvas id="poseModel" width="260" height="260"></canvas>
@@ -89,6 +95,51 @@
               <strong id="dayNightSummary">-</strong>
             </div>
           </div>
+          <div class="summaryItem">
+            <div class="summaryMetric">
+              <span>温度</span>
+              <strong id="temperatureSummary">-</strong>
+            </div>
+            <div class="summaryMetric">
+              <span>湿度</span>
+              <strong id="humiditySummary">-</strong>
+            </div>
+          </div>
+          <div class="summaryItem controlItem">
+            <div class="controlHead">
+              <span>Light</span>
+              <strong id="lightDutyText" class="srOnly">-</strong>
+            </div>
+            <div class="lightControlRow">
+              <input id="lightSlider" type="range" min="0" max="100" step="1" value="50" />
+              <input id="lightDutyInput" type="number" min="0" max="100" step="1" value="50" />
+            </div>
+            <div class="lightButtons">
+              <button type="button" data-light-duty="0">0</button>
+              <button type="button" data-light-duty="25">25</button>
+              <button type="button" data-light-duty="50">50</button>
+              <button type="button" data-light-duty="100">100</button>
+            </div>
+            <div class="lightStatus" id="lightStatus">waiting</div>
+          </div>
+          <div class="summaryItem controlItem" id="audioPlaybackPanel">
+            <div class="controlHead">
+              <span>Audio</span>
+              <strong id="playbackVolumeValue" class="srOnly">1.0x</strong>
+            </div>
+            <strong id="audioPlaybackState" class="srOnly">idle</strong>
+            <div class="lightControlRow">
+              <input id="playbackVolumeRange" type="range" min="0" max="2" step="0.1" value="1" />
+              <input id="playbackVolume" type="number" min="0" max="2" step="0.1" value="1" />
+            </div>
+            <div class="playbackButtons">
+              <button id="captureButton" type="button">Start</button>
+              <button id="playbackButton" type="button" disabled>Play</button>
+            </div>
+            <div class="playbackStatus" id="audioPlaybackStatus">waiting</div>
+            <strong id="playbackDevice" class="srOnly">3.5mm</strong>
+            <a class="playbackLink" id="audioPlaybackLink" href="#" target="_blank" rel="noreferrer">latest sample</a>
+          </div>
         </div>
       </section>
 
@@ -115,6 +166,7 @@
           <dl class="metricsGrid" id="yamnetMetrics">
             <dt>Cry status</dt><dd id="yamnetStatus">No YAMNet sample</dd>
             <dt>Cry score</dt><dd id="yamnetCryScore">-</dd>
+            <dt>Noise</dt><dd id="yamnetNoise">-</dd>
             <dt>Window</dt><dd id="yamnetWindow">-</dd>
             <dt>Top sounds</dt><dd id="yamnetTop">-</dd>
             <dt>YAMNet latency</dt><dd id="yamnetLatency">-</dd>
@@ -140,7 +192,6 @@
           <dl id="resources">
             <dt>CPU</dt><dd id="resourceCpu">-</dd>
             <dt>Memory</dt><dd id="resourceMemory">-</dd>
-            <dt>Temp</dt><dd id="resourceTemp">-</dd>
             <dt>main.py</dt><dd id="resourceApp">-</dd>
             <dt>ffmpeg</dt><dd id="resourceFfmpeg">-</dd>
           </dl>
@@ -149,6 +200,6 @@
     </main>
 
     <script src="/static/hls.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=activity-zone-sync-20260703"></script>
   </body>
 </html>

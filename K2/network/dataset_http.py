@@ -16,7 +16,7 @@ CAPTURE_STATE: EdgeState | None = None
 
 
 class DatasetHandler(SimpleHTTPRequestHandler):
-    server_version = "DeepZZZK2Dataset/0.1"
+    server_version = "DeepZZZK2Dataset/0.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"{self.log_date_time_string()} dataset {self.address_string()} {fmt % args}", flush=True)
@@ -35,13 +35,13 @@ class DatasetHandler(SimpleHTTPRequestHandler):
         elif path == "/api/snapshot":
             jpg = self._state().vision.latest_jpeg()
             if jpg is None:
-                self.send_error(HTTPStatus.NOT_FOUND, "no analysis frame yet")
+                self._send_json({"ok": False, "error": "no analysis frame yet"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._send_jpeg(jpg)
         elif path == "/api/raw-snapshot":
             jpg = self._state().vision.latest_raw_jpeg()
             if jpg is None:
-                self.send_error(HTTPStatus.NOT_FOUND, "no raw analysis frame yet")
+                self._send_json({"ok": False, "error": "no raw analysis frame yet"}, status=HTTPStatus.NOT_FOUND)
             else:
                 self._send_jpeg(jpg)
         else:
@@ -68,7 +68,7 @@ class DatasetHandler(SimpleHTTPRequestHandler):
     def _state(self) -> EdgeState:
         if CAPTURE_STATE is None:
             raise RuntimeError("dataset capture state is not initialized")
-        if not CAPTURE_STATE.args.enable_dataset_capture:
+        if not CAPTURE_STATE.config.dataset.enable_dataset_capture:
             raise PermissionError("dataset capture is disabled")
         return CAPTURE_STATE
 
@@ -77,9 +77,10 @@ class DatasetHandler(SimpleHTTPRequestHandler):
         if length <= 0:
             return {}
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except json.JSONDecodeError:
             return {}
+        return payload if isinstance(payload, dict) else {}
 
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -101,7 +102,7 @@ class DatasetHandler(SimpleHTTPRequestHandler):
     def _send_file(self, path: Path, content_type: str | None = None) -> None:
         resolved = path.resolve()
         allowed_roots = [STATIC_DIR.resolve(), TEMPLATES_DIR.resolve(), DATASET_DIR.resolve()]
-        if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
             self.send_error(HTTPStatus.FORBIDDEN)
             return
         if not resolved.exists() or not resolved.is_file():

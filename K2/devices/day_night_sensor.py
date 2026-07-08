@@ -2,6 +2,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from k2edge.runtime_store import read_json
 from utils.paths import DAY_NIGHT_LOG, DAY_NIGHT_SCRIPT, DAY_NIGHT_STATE_FILE, IRCUT_MODE_FILE
 
 
@@ -12,9 +13,16 @@ def day_night_status() -> dict[str, Any]:
         "updated_at": time.time(),
     }
     try:
-        value = DAY_NIGHT_STATE_FILE.read_text(encoding="utf-8").strip()
+        payload = read_json(DAY_NIGHT_STATE_FILE)
+        value = str(payload.get("state") or DAY_NIGHT_STATE_FILE.read_text(encoding="utf-8").strip())
         if value in {"day", "night"}:
-            status.update({"state": value, "source": "day_night_state_file"})
+            status.update(
+                {
+                    "state": value,
+                    "source": "day_night_state_file",
+                    "updated_at": payload.get("updated_at", status["updated_at"]),
+                }
+            )
             return status
     except OSError as exc:
         status["error"] = str(exc)
@@ -29,9 +37,16 @@ def day_night_status() -> dict[str, Any]:
         status["error"] = str(exc)
 
     try:
-        value = IRCUT_MODE_FILE.read_text(encoding="utf-8").strip()
+        payload = read_json(IRCUT_MODE_FILE)
+        value = str(payload.get("mode") or IRCUT_MODE_FILE.read_text(encoding="utf-8").strip())
         if value in {"day", "night", "off"}:
-            status.update({"state": value, "source": "ircut_saved_mode"})
+            status.update(
+                {
+                    "state": value,
+                    "source": "ircut_saved_mode",
+                    "updated_at": payload.get("updated_at", status["updated_at"]),
+                }
+            )
             return status
     except OSError as exc:
         status["error"] = str(exc)

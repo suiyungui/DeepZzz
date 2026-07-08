@@ -2,9 +2,11 @@ const statusEl = document.getElementById("status");
 const snapshotEl = document.getElementById("snapshot");
 const videoEl = document.getElementById("video");
 const overlayEl = document.getElementById("overlay");
+const zoneOverlayEl = document.getElementById("zoneOverlay");
 const poseModelEl = document.getElementById("poseModel");
 const previewMetaEl = document.getElementById("previewMeta");
 const lowresMetaEl = document.getElementById("lowresMeta");
+const sleepStateEl = document.getElementById("sleepState");
 const videoAgeSummaryEl = document.getElementById("videoAgeSummary");
 const videoFpsSummaryEl = document.getElementById("videoFpsSummary");
 const audioRateSummaryEl = document.getElementById("audioRateSummary");
@@ -13,6 +15,24 @@ const cpuSummaryEl = document.getElementById("cpuSummary");
 const memorySummaryEl = document.getElementById("memorySummary");
 const npuSummaryEl = document.getElementById("npuSummary");
 const dayNightSummaryEl = document.getElementById("dayNightSummary");
+const temperatureSummaryEl = document.getElementById("temperatureSummary");
+const humiditySummaryEl = document.getElementById("humiditySummary");
+const lightDutyTextEl = document.getElementById("lightDutyText");
+const lightSliderEl = document.getElementById("lightSlider");
+const lightDutyInputEl = document.getElementById("lightDutyInput");
+const lightStatusEl = document.getElementById("lightStatus");
+const audioPlaybackStateEl = document.getElementById("audioPlaybackState");
+const audioPlaybackStatusEl = document.getElementById("audioPlaybackStatus");
+const audioPlaybackLinkEl = document.getElementById("audioPlaybackLink");
+const playbackVolumeEl = document.getElementById("playbackVolume");
+const playbackVolumeRangeEl = document.getElementById("playbackVolumeRange");
+const playbackVolumeValueEl = document.getElementById("playbackVolumeValue");
+const playbackDeviceEl = document.getElementById("playbackDevice");
+const captureButtonEl = document.getElementById("captureButton");
+const playbackButtonEl = document.getElementById("playbackButton");
+const zoneSafeButtonEl = document.getElementById("zoneSafeButton");
+const zoneDangerButtonEl = document.getElementById("zoneDangerButton");
+const zoneClearButtonEl = document.getElementById("zoneClearButton");
 
 const deviceFields = {
   camera: document.getElementById("deviceCamera"),
@@ -26,7 +46,6 @@ const deviceFields = {
 const resourceFields = {
   cpu: document.getElementById("resourceCpu"),
   memory: document.getElementById("resourceMemory"),
-  temp: document.getElementById("resourceTemp"),
   app: document.getElementById("resourceApp"),
   ffmpeg: document.getElementById("resourceFfmpeg"),
 };
@@ -34,6 +53,7 @@ const resourceFields = {
 const yamnetFields = {
   status: document.getElementById("yamnetStatus"),
   cryScore: document.getElementById("yamnetCryScore"),
+  noise: document.getElementById("yamnetNoise"),
   window: document.getElementById("yamnetWindow"),
   top: document.getElementById("yamnetTop"),
   latency: document.getElementById("yamnetLatency"),
@@ -58,11 +78,27 @@ let hls = null;
 let analysisFpsText = "waiting";
 let snapshotRefreshMs = 500;
 let snapshotTimer = null;
+let lightCommitTimer = null;
+let lightPending = false;
+let lightEditing = false;
+let playbackPending = false;
+let playbackValueEditing = false;
+let faceCoverAwake = false;
+let cryingAwake = false;
+let motionAwake = false;
+let previousSleepSample = null;
+let activityZone = { mode: "safe", zone: null };
+let zoneDragStart = null;
+let zoneDragCurrent = null;
+let zoneSaving = false;
+let zoneBlinkTimer = null;
 
 // HD Preview should currently be a clean video stream only.
 // Keep the overlay canvas and drawOverlay() implementation intact so the pose
 // boxes/skeleton can be restored later by changing this flag to true.
 const ENABLE_HD_POSE_OVERLAY = false;
+const SLEEP_MOTION_THRESHOLD_PX = 25;
+const SLEEP_SAMPLE_INTERVAL_MS = 1000;
 
 const POSE_CONNECTIONS = [
   [16, 14], [14, 12], [15, 13], [13, 11], [12, 11],
@@ -176,11 +212,52 @@ function renderRuntime(status) {
   deviceFields.audio.textContent = audioSampleStatus(status.yamnet);
   deviceFields.cry.textContent = status.config.enable_yamnet ? "running" : "disabled";
   previewMetaEl.textContent = `${status.config.preview_size} / ${formatFps(status.config.preview_fps)}`;
-  lowresMetaEl.textContent = `${status.config.analysis_width}px / ${analysisFpsText}`;
+  renderLowresMeta(status.config, latestDetections);
   yamnetFields.window.textContent = `${status.config.yamnet_seconds}s`;
   renderSummary(status.summary);
   renderDayNight(status.day_night);
+  renderTemperatureHumidity(status.temperature_humidity);
+  renderLight(status.light);
   renderYamnet(status.yamnet);
+  renderAudioPlayback(status.audio_playback, status.config);
+  renderActivityZone(status.activity_zone);
+}
+
+function renderActivityZone(result) {
+  if (!result || zoneSaving) return;
+  const mode = result.mode === "danger" ? "danger" : "safe";
+  const zone = normalizeZone(result.zone);
+  activityZone = { mode, zone };
+  updateZoneButtons();
+}
+
+function updateZoneButtons() {
+  zoneSafeButtonEl.classList.toggle("activeSafe", activityZone.mode === "safe");
+  zoneDangerButtonEl.classList.toggle("activeDanger", activityZone.mode === "danger");
+}
+
+function normalizeZone(zone) {
+  if (!zone) return null;
+  const left = clamp01(zone.left);
+  const top = clamp01(zone.top);
+  const right = clamp01(zone.right);
+  const bottom = clamp01(zone.bottom);
+  const normalized = {
+    left: Math.min(left, right),
+    top: Math.min(top, bottom),
+    right: Math.max(left, right),
+    bottom: Math.max(top, bottom),
+  };
+  if (normalized.right - normalized.left <= 0.01 || normalized.bottom - normalized.top <= 0.01) {
+    return null;
+  }
+  return normalized;
+}
+
+function clamp01(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(1, number));
 }
 
 function renderResources(resources) {
@@ -194,7 +271,6 @@ function renderResources(resources) {
   const ffmpegProcess = processes.find((process) => process.name === "ffmpeg");
   resourceFields.cpu.textContent = resources.cpu_percent == null ? "warming up" : `${resources.cpu_percent}% / ${resources.cpu_count} cores`;
   resourceFields.memory.textContent = memory.total_mb ? `${memory.used_mb} / ${memory.total_mb} MB (${memory.percent}%)` : "-";
-  resourceFields.temp.textContent = resources.temperature_c == null ? "-" : `${resources.temperature_c} C`;
   resourceFields.app.textContent = formatProcess(appProcess);
   resourceFields.ffmpeg.textContent = formatProcess(ffmpegProcess);
   cpuSummaryEl.textContent = resources.cpu_percent == null ? "-" : `${resources.cpu_percent}%`;
@@ -219,9 +295,94 @@ function renderMetrics(result) {
   if (!result) {
     return;
   }
-  if (result.frame_size) {
-    lowresMetaEl.textContent = `${result.frame_size[0]}x${result.frame_size[1]} / ${analysisFpsText}`;
+  renderLowresMeta(null, result);
+}
+
+function renderLowresMeta(config, result) {
+  const frameSize = result && Array.isArray(result.frame_size) ? result.frame_size : null;
+  let text = null;
+  if (frameSize && frameSize.length >= 2) {
+    text = `${frameSize[0]}x${frameSize[1]} / ${analysisFpsText}`;
+  } else if (config) {
+    text = `${estimatedAnalysisSize(config)} / ${analysisFpsText}`;
   }
+  if (text && lowresMetaEl.textContent !== text) {
+    lowresMetaEl.textContent = text;
+  }
+}
+
+function updateSleepState(result) {
+  motionAwake = detectPersonBoxMotion(result);
+  const awake = motionAwake || faceCoverAwake || cryingAwake;
+  const label = awake ? "awake" : "asleep";
+  if (!sleepStateEl || sleepStateEl.textContent === label) return;
+  sleepStateEl.textContent = label;
+  sleepStateEl.classList.toggle("awake", awake);
+  sleepStateEl.classList.toggle("asleep", !awake);
+}
+
+function detectPersonBoxMotion(result) {
+  const corners = personBoxCorners(result);
+  const now = Date.now();
+  if (!corners) {
+    previousSleepSample = null;
+    return false;
+  }
+  if (!previousSleepSample || now - previousSleepSample.time < SLEEP_SAMPLE_INTERVAL_MS) {
+    if (!previousSleepSample) {
+      previousSleepSample = { time: now, corners };
+    }
+    return false;
+  }
+  const moved = cornersMoved(previousSleepSample.corners, corners, SLEEP_MOTION_THRESHOLD_PX);
+  previousSleepSample = { time: now, corners };
+  return moved;
+}
+
+function personBoxCorners(result) {
+  const person = result && result.persons && result.persons.length ? result.persons[0] : null;
+  const box = person && Array.isArray(person.box) ? person.box : null;
+  if (!box || box.length < 4) return null;
+  const [x1, y1, x2, y2] = box.map(Number);
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+  return [
+    [x1, y1],
+    [x2, y1],
+    [x2, y2],
+    [x1, y2],
+  ];
+}
+
+function cornersMoved(previousCorners, corners, threshold) {
+  return corners.some((corner, index) => {
+    const previous = previousCorners[index];
+    return pointDistance(previous, corner) >= threshold;
+  });
+}
+
+function pointDistance(a, b) {
+  const dx = a[0] - b[0];
+  const dy = a[1] - b[1];
+  return Math.hypot(dx, dy);
+}
+
+function estimatedAnalysisSize(config) {
+  const width = Number(config.analysis_width);
+  const previewSize = parseSize(config.preview_size);
+  if (Number.isFinite(width) && width > 0 && previewSize) {
+    const height = Math.round(width * previewSize.height / previewSize.width);
+    return `${width}x${height}`;
+  }
+  return config.analysis_width ? `${config.analysis_width}px` : "waiting";
+}
+
+function parseSize(value) {
+  const match = String(value || "").match(/^(\d+)x(\d+)$/);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
 }
 
 function renderSummary(summary) {
@@ -231,6 +392,8 @@ function renderSummary(summary) {
     audioAgeSummaryEl.textContent = "-";
     audioRateSummaryEl.textContent = "-";
     npuSummaryEl.textContent = "-";
+    temperatureSummaryEl.textContent = "-";
+    humiditySummaryEl.textContent = "-";
     return;
   }
   videoAgeSummaryEl.textContent = formatSeconds(summary.video_age_s);
@@ -240,12 +403,84 @@ function renderSummary(summary) {
   npuSummaryEl.textContent = summary.npu_percent == null ? "-" : `${summary.npu_percent}%`;
 }
 
+function renderTemperatureHumidity(result) {
+  if (!result || !result.has_reading) {
+    temperatureSummaryEl.textContent = "-";
+    humiditySummaryEl.textContent = result && result.connected ? "waiting" : "offline";
+    return;
+  }
+  const temperature = Number(result.temperature_c);
+  const humidity = Number(result.humidity_percent);
+  temperatureSummaryEl.textContent = Number.isFinite(temperature) ? `${temperature.toFixed(1)}C` : "-";
+  humiditySummaryEl.textContent = Number.isFinite(humidity) ? `${humidity.toFixed(1)}%` : "-";
+}
+
 function renderDayNight(dayNight) {
   if (!dayNight || !dayNight.state || dayNight.state === "unknown") {
     dayNightSummaryEl.textContent = "-";
     return;
   }
   dayNightSummaryEl.textContent = dayNight.state;
+}
+
+function renderLight(light) {
+  if (!light) {
+    lightDutyTextEl.textContent = "-";
+    lightStatusEl.textContent = "waiting";
+    return;
+  }
+  if (light.error) {
+    lightStatusEl.textContent = light.error;
+  } else {
+    lightStatusEl.textContent = light.connected ? "ok" : "offline";
+  }
+  if (light.duty == null) {
+    lightDutyTextEl.textContent = "-";
+    return;
+  }
+  const duty = clampDuty(light.duty);
+  lightDutyTextEl.textContent = `${duty}%`;
+  if (!lightEditing && !lightPending) {
+    lightSliderEl.value = String(duty);
+    lightDutyInputEl.value = String(duty);
+  }
+}
+
+function clampDuty(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function queueLightDuty(value) {
+  const duty = clampDuty(value);
+  lightEditing = true;
+  lightSliderEl.value = String(duty);
+  lightDutyInputEl.value = String(duty);
+  lightDutyTextEl.textContent = `${duty}%`;
+  lightStatusEl.textContent = "pending";
+  if (lightCommitTimer) {
+    window.clearTimeout(lightCommitTimer);
+  }
+  lightCommitTimer = window.setTimeout(() => commitLightDuty(duty), 180);
+}
+
+async function commitLightDuty(value) {
+  const duty = clampDuty(value);
+  lightPending = true;
+  lightStatusEl.textContent = "sending";
+  try {
+    const payload = await api("/api/light", {
+      method: "POST",
+      body: JSON.stringify({ duty }),
+    });
+    renderLight(payload.light);
+  } catch (err) {
+    lightStatusEl.textContent = err.message;
+  } finally {
+    lightPending = false;
+    lightEditing = false;
+  }
 }
 
 function formatFps(value) {
@@ -274,6 +509,18 @@ function formatRate(value, unit) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
   return `${number.toFixed(1)} ${unit}`;
+}
+
+function formatMs(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return `${number.toFixed(0)} ms`;
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, number));
 }
 
 function formatProcess(process) {
@@ -322,7 +569,7 @@ function renderFaceCover(result) {
   const person = result && result.persons && result.persons.length ? result.persons[0] : null;
   if (!person || !person.keypoints) {
     setCoverPanel("caution", "No person", "No pose result yet", {});
-    return;
+    return false;
   }
 
   // YOLOv8-pose face keypoints:
@@ -363,6 +610,7 @@ function renderFaceCover(result) {
   }
 
   setCoverPanel(mode, status, reason, face, visibleNames);
+  return mode === "covered";
 }
 
 const FACE_POINT_THRESHOLD = 0.25;
@@ -399,26 +647,35 @@ function setCryPanel(mode, status) {
 
 function renderYamnet(result) {
   if (!result) {
+    cryingAwake = false;
     cryLoopStateEl.textContent = "waiting";
     setCryPanel("caution", "Waiting for sample");
+    renderNoise(null);
     return;
   }
   if (result.status === "recording") {
+    cryingAwake = false;
     cryLoopStateEl.textContent = "active";
     setCryPanel("caution", "Recording...");
+    renderNoise(null, "recording");
     return;
   }
   if (result.status === "warming") {
+    cryingAwake = false;
     cryLoopStateEl.textContent = "active";
     setCryPanel("caution", "Buffering audio...");
     yamnetFields.cryScore.textContent = result.cry_score == null ? "-" : String(result.cry_score);
+    renderNoise(null, "warming");
     return;
   }
   if (result.status === "error") {
+    cryingAwake = false;
     cryLoopStateEl.textContent = "error";
     setCryPanel("caution", result.error || "Audio detection error");
+    renderNoise(null, "unavailable");
     return;
   }
+  cryingAwake = result.crying === true;
   cryLoopStateEl.textContent = "active";
   setCryPanel(result.crying ? "covered" : "clear", result.crying ? "Crying suspected" : "No crying detected");
   if (result.cry_score == null) {
@@ -433,6 +690,131 @@ function renderYamnet(result) {
     .slice(0, 5)
     .map((item) => `${item.label} ${item.score}`)
     .join(", ");
+  renderNoise(result);
+}
+
+function renderNoise(result, fallback = "waiting") {
+  if (!yamnetFields.noise) return;
+  if (!result) {
+    yamnetFields.noise.textContent = fallback;
+    return;
+  }
+  const noiseDb = Number(result.noise_db);
+  if (Number.isFinite(noiseDb)) {
+    yamnetFields.noise.textContent = `${noiseDb.toFixed(1)} dB`;
+    return;
+  }
+  const dbfs = Number(result.dbfs);
+  yamnetFields.noise.textContent = Number.isFinite(dbfs) ? `${Math.max(0, Math.min(120, dbfs + 94)).toFixed(1)} dB` : "-";
+}
+
+function renderAudioPlayback(playback, config) {
+  if (!audioPlaybackStateEl || !audioPlaybackStatusEl || !audioPlaybackLinkEl) {
+    return;
+  }
+  if (!playback) {
+    audioPlaybackStateEl.textContent = "idle";
+    audioPlaybackStatusEl.textContent = "waiting";
+    audioPlaybackLinkEl.style.display = "none";
+    return;
+  }
+  const result = playback.last_result || {};
+  const capture = playback.capture || {};
+  if (!playbackPending && !playbackValueEditing && config && config.audio_playback_volume != null) {
+    syncPlaybackVolume(config.audio_playback_volume);
+  }
+  const captureRunning = Boolean(playback.capture_running);
+  captureButtonEl.textContent = captureRunning ? "Stop" : "Start";
+  captureButtonEl.disabled = playbackPending || playback.running;
+  playbackButtonEl.disabled = playback.running || playbackPending || captureRunning || !capture.file;
+  audioPlaybackStateEl.textContent = captureRunning ? "capturing" : (playback.running ? "playing" : (result.status || capture.status || "idle"));
+  if (playback.error) {
+    audioPlaybackStatusEl.textContent = playback.error;
+  } else if (captureRunning) {
+    audioPlaybackStatusEl.textContent = `capturing ${formatSeconds(playback.capture_elapsed_s || 0)}`;
+  } else if (playback.running) {
+    audioPlaybackStatusEl.textContent = `playing ${result.seconds || "-"}s on 3.5mm`;
+  } else if (result.status === "ok") {
+    audioPlaybackStatusEl.textContent = `played in ${formatMs(result.elapsed_ms)} on 3.5mm`;
+  } else if (result.status === "playing") {
+    audioPlaybackStatusEl.textContent = "starting 3.5mm";
+  } else if (capture.file) {
+    audioPlaybackStatusEl.textContent = `sample ready / ${formatSeconds(capture.seconds)}`;
+  } else {
+    audioPlaybackStatusEl.textContent = "idle";
+  }
+  if (playbackDeviceEl) {
+    playbackDeviceEl.textContent = "3.5mm";
+  }
+  const audioUrl = result.audio_url || capture.audio_url;
+  if (audioUrl) {
+    audioPlaybackLinkEl.href = audioUrl;
+    audioPlaybackLinkEl.textContent = audioUrl;
+    audioPlaybackLinkEl.style.display = "inline-block";
+  } else {
+    audioPlaybackLinkEl.style.display = "none";
+  }
+}
+
+async function requestAudioPlayback() {
+  const volume = clampNumber(playbackVolumeEl.value, 0, 2, 1);
+  syncPlaybackVolume(volume);
+  playbackPending = true;
+  playbackButtonEl.disabled = true;
+  audioPlaybackStateEl.textContent = "starting";
+  audioPlaybackStatusEl.textContent = "sending playback request";
+  try {
+    const payload = await api("/api/audio/playback/play", {
+      method: "POST",
+      body: JSON.stringify({
+        volume,
+      }),
+    });
+    renderAudioPlayback({ running: true, last_result: payload.result }, null);
+  } catch (err) {
+    audioPlaybackStateEl.textContent = "error";
+    audioPlaybackStatusEl.textContent = err.message;
+  } finally {
+    playbackPending = false;
+    refresh();
+  }
+}
+
+function syncPlaybackVolume(value) {
+  const volume = clampNumber(value, 0, 2, 1);
+  const text = volume.toFixed(1);
+  playbackVolumeEl.value = text;
+  playbackVolumeRangeEl.value = text;
+  if (playbackVolumeValueEl) playbackVolumeValueEl.textContent = `${text}x`;
+  return volume;
+}
+
+async function togglePlaybackCapture() {
+  const stopping = captureButtonEl.textContent === "Stop";
+  const volume = clampNumber(playbackVolumeEl.value, 0, 2, 1);
+  playbackPending = true;
+  captureButtonEl.disabled = true;
+  playbackButtonEl.disabled = true;
+  audioPlaybackStateEl.textContent = stopping ? "saving" : "capturing";
+  audioPlaybackStatusEl.textContent = stopping ? "saving sample" : "capture started";
+  try {
+    const payload = await api(stopping ? "/api/audio/playback/capture/stop" : "/api/audio/playback/capture/start", {
+      method: "POST",
+      body: JSON.stringify({ volume }),
+    });
+    if (stopping) {
+      renderAudioPlayback({ running: false, capture: payload.result, last_result: null }, null);
+    } else {
+      renderAudioPlayback({ running: false, capture_running: true, capture_started_at: payload.result.capture_started_at }, null);
+    }
+  } catch (err) {
+    audioPlaybackStateEl.textContent = "error";
+    audioPlaybackStatusEl.textContent = err.message;
+  } finally {
+    playbackPending = false;
+    captureButtonEl.disabled = false;
+    refresh();
+  }
 }
 
 function drawConfidenceLabel(ctx, index, confidence, active, face) {
@@ -511,6 +893,160 @@ function drawOverlay() {
   }
 }
 
+function drawZoneOverlay() {
+  const ctx = zoneOverlayEl.getContext("2d");
+  const rect = zoneOverlayEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  zoneOverlayEl.width = Math.max(1, Math.round(rect.width * dpr));
+  zoneOverlayEl.height = Math.max(1, Math.round(rect.height * dpr));
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  const contentBox = lowresContentBox(rect.width, rect.height);
+  drawPersonBox(ctx, contentBox);
+  drawActivityZone(ctx, contentBox);
+}
+
+function drawPersonBox(ctx, contentBox) {
+  const box = personBox(latestDetections);
+  if (!box) return;
+  const x = contentBox.x + box.left * contentBox.w;
+  const y = contentBox.y + box.top * contentBox.h;
+  const w = Math.max(1, (box.right - box.left) * contentBox.w);
+  const h = Math.max(1, (box.bottom - box.top) * contentBox.h);
+  ctx.strokeStyle = "#1f5f4f";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(x, y, w, h);
+}
+
+function drawActivityZone(ctx, contentBox) {
+  const zone = activeDragZone(contentBox) || activityZone.zone;
+  if (!zone) return;
+  const active = activityZoneTriggered(zone);
+  const flashOn = active && Math.floor(Date.now() / 260) % 2 === 0;
+  const color = activityZone.mode === "danger" ? "#e76f51" : "#5ec8a5";
+  const x = contentBox.x + zone.left * contentBox.w;
+  const y = contentBox.y + zone.top * contentBox.h;
+  const w = Math.max(1, (zone.right - zone.left) * contentBox.w);
+  const h = Math.max(1, (zone.bottom - zone.top) * contentBox.h);
+  ctx.globalAlpha = flashOn ? 1 : 0.62;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = flashOn ? 5 : 3;
+  ctx.strokeRect(x, y, w, h);
+  ctx.globalAlpha = 1;
+}
+
+function activeDragZone(contentBox) {
+  if (!zoneDragStart || !zoneDragCurrent || contentBox.w <= 0 || contentBox.h <= 0) return null;
+  return normalizeZone({
+    left: (zoneDragStart.x - contentBox.x) / contentBox.w,
+    top: (zoneDragStart.y - contentBox.y) / contentBox.h,
+    right: (zoneDragCurrent.x - contentBox.x) / contentBox.w,
+    bottom: (zoneDragCurrent.y - contentBox.y) / contentBox.h,
+  });
+}
+
+function overlayPoint(event) {
+  const rect = zoneOverlayEl.getBoundingClientRect();
+  const contentBox = lowresContentBox(rect.width, rect.height);
+  return {
+    x: Math.max(contentBox.x, Math.min(contentBox.x + contentBox.w, event.clientX - rect.left)),
+    y: Math.max(contentBox.y, Math.min(contentBox.y + contentBox.h, event.clientY - rect.top)),
+  };
+}
+
+function lowresContentBox(width, height) {
+  const frameSize = latestDetections && Array.isArray(latestDetections.frame_size) ? latestDetections.frame_size : null;
+  if (!frameSize || frameSize.length < 2) return { x: 0, y: 0, w: width, h: height };
+  const frameW = Number(frameSize[0]);
+  const frameH = Number(frameSize[1]);
+  if (!Number.isFinite(frameW) || !Number.isFinite(frameH) || frameW <= 0 || frameH <= 0) {
+    return { x: 0, y: 0, w: width, h: height };
+  }
+  return containBox(width, height, frameW / frameH);
+}
+
+function personBox(result) {
+  const person = result && result.persons && result.persons.length ? result.persons[0] : null;
+  const box = person && Array.isArray(person.box) ? person.box : null;
+  const frameSize = result && Array.isArray(result.frame_size) ? result.frame_size : null;
+  if (!box || box.length < 4 || !frameSize || frameSize.length < 2) return null;
+  const frameW = Number(frameSize[0]);
+  const frameH = Number(frameSize[1]);
+  if (!Number.isFinite(frameW) || !Number.isFinite(frameH) || frameW <= 0 || frameH <= 0) return null;
+  return normalizeZone({
+    left: Number(box[0]) / frameW,
+    top: Number(box[1]) / frameH,
+    right: Number(box[2]) / frameW,
+    bottom: Number(box[3]) / frameH,
+  });
+}
+
+function activityZoneTriggered(zone) {
+  const person = personBox(latestDetections);
+  if (!person || !zone) return false;
+  if (activityZone.mode === "danger") {
+    return boxesOverlap(person, zone);
+  }
+  const fullyInside = person.left >= zone.left &&
+    person.top >= zone.top &&
+    person.right <= zone.right &&
+    person.bottom <= zone.bottom;
+  return !fullyInside;
+}
+
+function boxesOverlap(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+}
+
+async function saveActivityZone(zone) {
+  zoneSaving = true;
+  try {
+    const payload = await api("/api/activity-zone", {
+      method: "POST",
+      body: JSON.stringify({
+        mode: activityZone.mode,
+        zone,
+      }),
+    });
+    activityZone = {
+      mode: payload.result.mode === "danger" ? "danger" : "safe",
+      zone: normalizeZone(payload.result.zone),
+    };
+    updateZoneButtons();
+  } catch (err) {
+    setStatus(err.message);
+  } finally {
+    zoneSaving = false;
+    drawZoneOverlay();
+  }
+}
+
+async function clearActivityZone() {
+  zoneSaving = true;
+  try {
+    const payload = await api("/api/activity-zone", { method: "DELETE" });
+    activityZone = {
+      mode: payload.result.mode === "danger" ? "danger" : "safe",
+      zone: normalizeZone(payload.result.zone),
+    };
+    updateZoneButtons();
+  } catch (err) {
+    setStatus(err.message);
+  } finally {
+    zoneSaving = false;
+    drawZoneOverlay();
+  }
+}
+
+async function setActivityZoneMode(mode) {
+  activityZone = { ...activityZone, mode };
+  updateZoneButtons();
+  drawZoneOverlay();
+  if (activityZone.zone) {
+    await saveActivityZone(activityZone.zone);
+  }
+}
+
 function containBox(w, h, ratio) {
   const current = w / h;
   if (current > ratio) {
@@ -535,10 +1071,12 @@ async function refresh() {
     latestDetections = detections.result;
     renderMetrics(latestDetections);
     drawPoseModel(latestDetections);
-    renderFaceCover(latestDetections);
+    faceCoverAwake = renderFaceCover(latestDetections);
+    updateSleepState(latestDetections);
     // HD overlay is intentionally disabled for now. drawOverlay() still clears
     // the canvas and keeps the old drawing path ready for later restoration.
     drawOverlay();
+    drawZoneOverlay();
   } catch (err) {
     setStatus(err.message);
   }
@@ -555,12 +1093,68 @@ function scheduleSnapshotRefresh(delay = snapshotRefreshMs) {
   snapshotTimer = window.setTimeout(refreshSnapshot, delay);
 }
 
-window.addEventListener("resize", drawOverlay);
+window.addEventListener("resize", () => {
+  drawOverlay();
+  drawZoneOverlay();
+});
+zoneOverlayEl.addEventListener("pointerdown", (event) => {
+  zoneOverlayEl.setPointerCapture(event.pointerId);
+  zoneDragStart = overlayPoint(event);
+  zoneDragCurrent = zoneDragStart;
+  drawZoneOverlay();
+});
+zoneOverlayEl.addEventListener("pointermove", (event) => {
+  if (!zoneDragStart) return;
+  zoneDragCurrent = overlayPoint(event);
+  drawZoneOverlay();
+});
+zoneOverlayEl.addEventListener("pointerup", async (event) => {
+  if (!zoneDragStart) return;
+  zoneDragCurrent = overlayPoint(event);
+  const rect = zoneOverlayEl.getBoundingClientRect();
+  const zone = activeDragZone(lowresContentBox(rect.width, rect.height));
+  zoneDragStart = null;
+  zoneDragCurrent = null;
+  if (zone) {
+    activityZone = { ...activityZone, zone };
+    drawZoneOverlay();
+    await saveActivityZone(zone);
+  } else {
+    drawZoneOverlay();
+  }
+});
+zoneOverlayEl.addEventListener("pointercancel", () => {
+  zoneDragStart = null;
+  zoneDragCurrent = null;
+  drawZoneOverlay();
+});
+zoneSafeButtonEl.addEventListener("click", () => setActivityZoneMode("safe"));
+zoneDangerButtonEl.addEventListener("click", () => setActivityZoneMode("danger"));
+zoneClearButtonEl.addEventListener("click", clearActivityZone);
 snapshotEl.addEventListener("load", () => scheduleSnapshotRefresh());
 snapshotEl.addEventListener("error", () => scheduleSnapshotRefresh(1000));
+lightSliderEl.addEventListener("input", () => queueLightDuty(lightSliderEl.value));
+lightDutyInputEl.addEventListener("change", () => queueLightDuty(lightDutyInputEl.value));
+for (const button of document.querySelectorAll("[data-light-duty]")) {
+  button.addEventListener("click", () => queueLightDuty(button.dataset.lightDuty));
+}
+playbackButtonEl.addEventListener("click", requestAudioPlayback);
+captureButtonEl.addEventListener("click", togglePlaybackCapture);
+playbackVolumeRangeEl.addEventListener("input", () => {
+  playbackValueEditing = true;
+  syncPlaybackVolume(playbackVolumeRangeEl.value);
+});
+playbackVolumeEl.addEventListener("input", () => {
+  playbackValueEditing = true;
+  syncPlaybackVolume(playbackVolumeEl.value);
+});
+syncPlaybackVolume(playbackVolumeEl.value);
 connectHls();
 drawPoseModel(null);
-renderFaceCover(null);
+faceCoverAwake = renderFaceCover(null);
+updateSleepState(null);
+drawZoneOverlay();
+zoneBlinkTimer = window.setInterval(drawZoneOverlay, 260);
 refresh();
 refreshSnapshot();
 setInterval(refresh, 1000);

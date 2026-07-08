@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.naviga"
+    namespace = "com.naviga.app"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -12,18 +12,17 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.naviga"
-        minSdk = 35
+        applicationId = "com.naviga.app"
+        minSdk = 29
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -43,7 +42,6 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -53,11 +51,5 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
-    testImplementation(libs.junit)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

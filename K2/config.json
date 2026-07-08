@@ -24,7 +24,7 @@
   "low_light_gamma": 1.35,
   "low_light_clahe_clip": 2.0,
   "low_light_desaturate": false,
-  "enable_dataset_capture": true,
+  "enable_dataset_capture": false,
   "enable_pose": true,
   "start_camera": true
 }
